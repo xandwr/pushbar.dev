@@ -18,38 +18,41 @@ const CAMERA_VIEWS: Record<string, CameraView> = {
         lookAt: { x: 0, y: 0, z: 0 },
         fov: 45,
     },
+    landingMobile: {
+        lookAt: { x: -0.4, y: 0, z: 0 },
+        fov: 45,
+    },
     stargazer: {
         lookAt: { x: 1.0, y: 2.0, z: 0 },
         fov: 30,
     },
 };
 
-const getViewForPath = (pathname: string): CameraView => {
-    return pathname === "/" ? CAMERA_VIEWS.landing : CAMERA_VIEWS.stargazer;
+const getViewForPath = (pathname: string, isMobile: boolean): CameraView => {
+    if (pathname === "/") {
+        return isMobile ? CAMERA_VIEWS.landingMobile : CAMERA_VIEWS.landing;
+    }
+    return CAMERA_VIEWS.stargazer;
 };
 
-// 3D Star particle shader - renders stars with twinkle effect
+// 3D Star particle shader
 const starVertexShader = `
 attribute float aSize;
-attribute float aSeed;
 attribute vec3 aColor;
 
-uniform float uTime;
 uniform float uPixelRatio;
 
 varying vec3 vColor;
-varying float vSeed;
 varying float vSize;
 
 void main() {
     vColor = aColor;
-    vSeed = aSeed;
 
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
 
-    // Size attenuation - smaller base, gentler falloff with distance
-    float size = aSize * uPixelRatio * (80.0 / -mvPosition.z);
-    size = clamp(size, 1.0, 4.0);
+    // Size attenuation
+    float size = aSize * uPixelRatio * (50.0 / -mvPosition.z);
+    size = clamp(size, 0.8, 3.0);
     vSize = size;
 
     gl_PointSize = size;
@@ -58,36 +61,21 @@ void main() {
 `;
 
 const starFragmentShader = `
-uniform float uTime;
-
 varying vec3 vColor;
-varying float vSeed;
 varying float vSize;
 
 void main() {
     vec2 center = gl_PointCoord - 0.5;
     float dist = length(center);
 
-    // Sharp circular core with subtle glow
-    // Smaller stars are sharper, larger stars have slight glow
-    float coreRadius = 0.15;
-    float glowRadius = 0.5;
+    // Soft circular falloff to reduce aliasing
+    float alpha = 1.0 - smoothstep(0.2, 0.5, dist);
 
-    // Discard outside the point
-    if (dist > glowRadius) discard;
+    // Fade out very small stars to prevent flickering
+    float sizeFade = smoothstep(0.8, 1.5, vSize);
+    alpha *= sizeFade;
 
-    // Sharp bright core
-    float core = 1.0 - smoothstep(0.0, coreRadius, dist);
-
-    // Subtle outer glow (only for larger stars)
-    float glow = (1.0 - smoothstep(coreRadius, glowRadius, dist)) * 0.3;
-
-    float alpha = core + glow * (vSize / 4.0);
-
-    // Twinkle effect - subtle variation
-    float twinkle = 0.85 + 0.15 * sin(uTime * 1.5 + vSeed * 100.0);
-
-    gl_FragColor = vec4(vColor * twinkle, alpha);
+    gl_FragColor = vec4(vColor, alpha);
 }
 `;
 
@@ -660,65 +648,59 @@ export function Globe() {
         rendererRef.current = renderer;
 
         // === 3D STAR FIELD ===
-        const starCount = 3000;
+        const starCount = 8000;
         const starPositions = new Float32Array(starCount * 3);
         const starSizes = new Float32Array(starCount);
-        const starSeeds = new Float32Array(starCount);
         const starColors = new Float32Array(starCount * 3);
 
-        // Distribute stars in a large sphere around the scene
-        const STAR_SPHERE_RADIUS = 50;
+        // Distribute stars in a large sphere
+        const STAR_NEAR = 25;
+        const STAR_FAR = 80;
         for (let i = 0; i < starCount; i++) {
-            // Random position on sphere surface
             const theta = Math.random() * Math.PI * 2;
             const phi = Math.acos(2 * Math.random() - 1);
-            const r = STAR_SPHERE_RADIUS * (0.5 + Math.random() * 0.5);
+            const r = STAR_NEAR + (STAR_FAR - STAR_NEAR) * Math.random();
 
             starPositions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
             starPositions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
             starPositions[i * 3 + 2] = r * Math.cos(phi);
 
-            // Random size - mostly tiny pinpoints, few brighter stars
+            // Random size - mostly tiny pinpoints
             const sizeRand = Math.random();
-            if (sizeRand > 0.98) {
-                starSizes[i] = 2.5 + Math.random() * 1.5; // Rare bright stars (2%)
-            } else if (sizeRand > 0.9) {
-                starSizes[i] = 1.5 + Math.random() * 1.0; // Medium stars (8%)
+            if (sizeRand > 0.995) {
+                starSizes[i] = 2.0 + Math.random() * 1.0;
+            } else if (sizeRand > 0.97) {
+                starSizes[i] = 1.2 + Math.random() * 0.8;
             } else {
-                starSizes[i] = 0.8 + Math.random() * 0.7; // Small pinpoints (90%)
+                starSizes[i] = 0.5 + Math.random() * 0.5;
             }
 
-            // Random seed for twinkle timing
-            starSeeds[i] = Math.random();
-
-            // Color variation - mostly cool colors with some green accent
+            // Color variation
             const colorRand = Math.random();
-            if (colorRand > 0.85) {
-                // Hacker green stars (15%)
-                starColors[i * 3] = 0.2;
-                starColors[i * 3 + 1] = 0.9;
+            if (colorRand > 0.92) {
+                // Green accent
+                starColors[i * 3] = 0.3;
+                starColors[i * 3 + 1] = 0.8;
                 starColors[i * 3 + 2] = 0.5;
-            } else if (colorRand > 0.7) {
-                // Warm white stars (15%)
-                starColors[i * 3] = 0.9;
-                starColors[i * 3 + 1] = 0.85;
+            } else if (colorRand > 0.85) {
+                // Warm white
+                starColors[i * 3] = 0.85;
+                starColors[i * 3 + 1] = 0.8;
                 starColors[i * 3 + 2] = 0.7;
             } else {
-                // Cool blue-white stars (70%)
-                starColors[i * 3] = 0.6 + Math.random() * 0.3;
-                starColors[i * 3 + 1] = 0.7 + Math.random() * 0.3;
-                starColors[i * 3 + 2] = 0.9 + Math.random() * 0.1;
+                // Cool blue-white
+                starColors[i * 3] = 0.5 + Math.random() * 0.3;
+                starColors[i * 3 + 1] = 0.6 + Math.random() * 0.3;
+                starColors[i * 3 + 2] = 0.8 + Math.random() * 0.2;
             }
         }
 
         const starGeometry = new THREE.BufferGeometry();
         starGeometry.setAttribute("position", new THREE.BufferAttribute(starPositions, 3));
         starGeometry.setAttribute("aSize", new THREE.BufferAttribute(starSizes, 1));
-        starGeometry.setAttribute("aSeed", new THREE.BufferAttribute(starSeeds, 1));
         starGeometry.setAttribute("aColor", new THREE.BufferAttribute(starColors, 3));
 
         const starUniforms = {
-            uTime: { value: 0 },
             uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
         };
 
@@ -941,6 +923,7 @@ export function Globe() {
         // Camera tweening state
         const currentLookAt = new THREE.Vector3(0, 0, 0);
         const LERP_FACTOR = 0.03;
+        let isMobile = container.clientWidth < 768;
 
         // Animation
         let animationId: number;
@@ -952,7 +935,6 @@ export function Globe() {
             const elapsed = clock.getElapsedTime();
 
             // Update shaders
-            starUniforms.uTime.value = elapsed;
             globeUniforms.uTime.value = elapsed;
 
             // Update wispy cloud uniforms
@@ -977,7 +959,7 @@ export function Globe() {
 
             // Camera tweening based on current route
             // Only rotation (lookAt) and FOV change - position stays fixed
-            const targetView = getViewForPath(pathnameRef.current);
+            const targetView = getViewForPath(pathnameRef.current, isMobile);
 
             // Lerp lookAt target (controls rotation)
             currentLookAt.x += (targetView.lookAt.x - currentLookAt.x) * LERP_FACTOR;
@@ -1014,6 +996,7 @@ export function Globe() {
             renderer.setSize(container.clientWidth, container.clientHeight);
             const pixelRatio = Math.min(window.devicePixelRatio, 2);
             starUniforms.uPixelRatio.value = pixelRatio;
+            isMobile = container.clientWidth < 768;
         };
 
         window.addEventListener("resize", handleResize);

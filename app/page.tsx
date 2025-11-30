@@ -20,8 +20,6 @@ export default function Home() {
                 </div>
             </div>
 
-            {/* Gradient overlay for depth */}
-            <div className="absolute inset-0 bg-linear-to-t from-black via-transparent to-black/50 pointer-events-none z-1" />
         </div>
     );
 }
