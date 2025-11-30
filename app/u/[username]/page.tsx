@@ -84,14 +84,14 @@ export default async function UserWorkspace({ params }: Props) {
 
     if (!user) {
         return (
-            <div className="min-h-screen flex items-center justify-center bg-gray-50">
+            <div className="min-h-screen flex items-center justify-center">
                 <div className="text-center">
-                    <h1 className="text-4xl font-bold text-gray-900 mb-4">
-                        User not found
+                    <h1 className="text-4xl font-mono font-bold text-zinc-100 mb-4">
+                        <span className="text-red-500">404</span> user not found
                     </h1>
-                    <p className="text-gray-600">
-                        The GitHub user <span className="font-mono">{username}</span> does
-                        not exist.
+                    <p className="text-zinc-500 font-mono">
+                        <span className="text-zinc-600">$</span> github user{" "}
+                        <span className="text-emerald-400">{username}</span> does not exist
                     </p>
                 </div>
             </div>
@@ -99,41 +99,46 @@ export default async function UserWorkspace({ params }: Props) {
     }
 
     return (
-        <div className="min-h-screen bg-gray-50 py-12 px-4">
+        <div className="min-h-screen py-12 px-4">
             <div className="max-w-4xl mx-auto">
                 {/* Profile Header */}
-                <div className="bg-white rounded-xl shadow-sm p-8 mb-8">
+                <div className="border border-zinc-800 rounded-lg bg-zinc-900/50 p-8 mb-8">
                     <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6">
-                        <Image
-                            src={user.avatar_url}
-                            alt={user.name || user.login}
-                            width={120}
-                            height={120}
-                            className="rounded-full"
-                        />
-                        <div className="text-center sm:text-left">
-                            <h1 className="text-3xl font-bold text-gray-900">
+                        <div className="relative">
+                            <Image
+                                src={user.avatar_url}
+                                alt={user.name || user.login}
+                                width={120}
+                                height={120}
+                                className="rounded-lg border border-zinc-700"
+                            />
+                            <div className="absolute -bottom-1 -right-1 w-4 h-4 bg-emerald-500 rounded-full border-2 border-zinc-900" />
+                        </div>
+                        <div className="text-center sm:text-left flex-1">
+                            <h1 className="text-3xl font-mono font-bold text-zinc-100">
                                 {user.name || user.login}
                             </h1>
                             <a
                                 href={user.html_url}
                                 target="_blank"
                                 rel="noopener noreferrer"
-                                className="text-gray-500 hover:text-gray-700"
+                                className="text-zinc-500 hover:text-emerald-400 font-mono text-sm transition-colors"
                             >
                                 @{user.login}
                             </a>
-                            {user.bio && <p className="mt-3 text-gray-700">{user.bio}</p>}
+                            {user.bio && (
+                                <p className="mt-3 text-zinc-400">{user.bio}</p>
+                            )}
 
-                            <div className="flex flex-wrap gap-4 mt-4 justify-center sm:justify-start">
+                            <div className="flex flex-wrap gap-4 mt-4 justify-center sm:justify-start font-mono text-sm">
                                 {user.location && (
-                                    <span className="text-gray-600 text-sm">
-                                        📍 {user.location}
+                                    <span className="text-zinc-500">
+                                        <span className="text-zinc-600">loc:</span> {user.location}
                                     </span>
                                 )}
                                 {user.company && (
-                                    <span className="text-gray-600 text-sm">
-                                        🏢 {user.company}
+                                    <span className="text-zinc-500">
+                                        <span className="text-zinc-600">org:</span> {user.company}
                                     </span>
                                 )}
                                 {user.blog && (
@@ -145,9 +150,9 @@ export default async function UserWorkspace({ params }: Props) {
                                         }
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        className="text-blue-600 hover:underline text-sm"
+                                        className="text-emerald-400 hover:text-emerald-300 transition-colors"
                                     >
-                                        🔗 {user.blog}
+                                        {user.blog}
                                     </a>
                                 )}
                                 {user.twitter_username && (
@@ -155,31 +160,37 @@ export default async function UserWorkspace({ params }: Props) {
                                         href={`https://twitter.com/${user.twitter_username}`}
                                         target="_blank"
                                         rel="noopener noreferrer"
-                                        className="text-blue-600 hover:underline text-sm"
+                                        className="text-emerald-400 hover:text-emerald-300 transition-colors"
                                     >
-                                        𝕏 @{user.twitter_username}
+                                        @{user.twitter_username}
                                     </a>
                                 )}
                             </div>
 
-                            <div className="flex gap-6 mt-6 justify-center sm:justify-start">
+                            <div className="flex gap-8 mt-6 justify-center sm:justify-start font-mono">
                                 <div className="text-center">
-                                    <div className="text-2xl font-bold text-gray-900">
+                                    <div className="text-2xl font-bold text-emerald-400">
                                         {user.public_repos}
                                     </div>
-                                    <div className="text-sm text-gray-500">Repos</div>
+                                    <div className="text-xs text-zinc-600 uppercase tracking-wider">
+                                        repos
+                                    </div>
                                 </div>
                                 <div className="text-center">
-                                    <div className="text-2xl font-bold text-gray-900">
+                                    <div className="text-2xl font-bold text-zinc-100">
                                         {user.followers}
                                     </div>
-                                    <div className="text-sm text-gray-500">Followers</div>
+                                    <div className="text-xs text-zinc-600 uppercase tracking-wider">
+                                        followers
+                                    </div>
                                 </div>
                                 <div className="text-center">
-                                    <div className="text-2xl font-bold text-gray-900">
+                                    <div className="text-2xl font-bold text-zinc-100">
                                         {user.following}
                                     </div>
-                                    <div className="text-sm text-gray-500">Following</div>
+                                    <div className="text-xs text-zinc-600 uppercase tracking-wider">
+                                        following
+                                    </div>
                                 </div>
                             </div>
                         </div>
@@ -189,8 +200,8 @@ export default async function UserWorkspace({ params }: Props) {
                 {/* Recent Repositories */}
                 {repos.length > 0 && (
                     <div>
-                        <h2 className="text-xl font-bold text-gray-900 mb-4">
-                            Recent Repositories
+                        <h2 className="text-lg font-mono text-zinc-400 mb-4">
+                            <span className="text-zinc-600">~/</span>repos
                         </h2>
                         <div className="grid gap-4 md:grid-cols-2">
                             {repos.map((repo) => (
@@ -199,20 +210,28 @@ export default async function UserWorkspace({ params }: Props) {
                                     href={repo.html_url}
                                     target="_blank"
                                     rel="noopener noreferrer"
-                                    className="bg-white rounded-lg shadow-sm p-5 hover:shadow-md transition-shadow"
+                                    className="border border-zinc-800 rounded-lg bg-zinc-900/30 p-5 hover:border-zinc-700 hover:bg-zinc-900/50 transition-all group"
                                 >
-                                    <h3 className="font-semibold text-blue-600 hover:underline">
+                                    <h3 className="font-mono font-semibold text-zinc-100 group-hover:text-emerald-400 transition-colors">
                                         {repo.name}
                                     </h3>
                                     {repo.description && (
-                                        <p className="text-gray-600 text-sm mt-1 line-clamp-2">
+                                        <p className="text-zinc-500 text-sm mt-1 line-clamp-2">
                                             {repo.description}
                                         </p>
                                     )}
-                                    <div className="flex gap-4 mt-3 text-sm text-gray-500">
-                                        {repo.language && <span>📝 {repo.language}</span>}
-                                        <span>⭐ {repo.stargazers_count}</span>
-                                        <span>🍴 {repo.forks_count}</span>
+                                    <div className="flex gap-4 mt-3 text-xs font-mono text-zinc-600">
+                                        {repo.language && (
+                                            <span className="text-zinc-500">{repo.language}</span>
+                                        )}
+                                        <span>
+                                            <span className="text-yellow-500">*</span>{" "}
+                                            {repo.stargazers_count}
+                                        </span>
+                                        <span>
+                                            <span className="text-zinc-500">/</span>{" "}
+                                            {repo.forks_count}
+                                        </span>
                                     </div>
                                 </a>
                             ))}
