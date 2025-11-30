@@ -2,11 +2,16 @@
 
 import Link from "next/link";
 import { useState } from "react";
+import {
+    SignedIn,
+    SignedOut,
+    SignInButton,
+    UserButton,
+} from "@clerk/nextjs";
 
 const navLinks = [
     { href: "/explore", label: "explore" },
     { href: "/docs", label: "docs" },
-    { href: "/login", label: "login" },
 ];
 
 export function Navbar() {
@@ -36,6 +41,24 @@ export function Navbar() {
                                 {link.label}
                             </Link>
                         ))}
+                        <SignedOut>
+                            <SignInButton mode="modal">
+                                <button className="px-4 py-2 font-mono text-sm text-zinc-400 hover:text-emerald-400 hover:bg-zinc-900/50 rounded transition-all">
+                                    login
+                                </button>
+                            </SignInButton>
+                        </SignedOut>
+                        <SignedIn>
+                            <div className="ml-2">
+                                <UserButton
+                                    appearance={{
+                                        elements: {
+                                            avatarBox: "w-8 h-8",
+                                        },
+                                    }}
+                                />
+                            </div>
+                        </SignedIn>
                     </div>
 
                     {/* Mobile Hamburger */}
@@ -85,6 +108,28 @@ export function Navbar() {
                                 {link.label}
                             </Link>
                         ))}
+                        <SignedOut>
+                            <SignInButton mode="modal">
+                                <button
+                                    onClick={() => setMobileOpen(false)}
+                                    className="block w-full text-left px-3 py-2 font-mono text-sm text-zinc-400 hover:text-emerald-400 hover:bg-zinc-900/50 rounded transition-all"
+                                >
+                                    <span className="text-zinc-600 mr-2">$</span>
+                                    login
+                                </button>
+                            </SignInButton>
+                        </SignedOut>
+                        <SignedIn>
+                            <div className="px-3 py-2">
+                                <UserButton
+                                    appearance={{
+                                        elements: {
+                                            avatarBox: "w-8 h-8",
+                                        },
+                                    }}
+                                />
+                            </div>
+                        </SignedIn>
                     </div>
                 </div>
             )}
