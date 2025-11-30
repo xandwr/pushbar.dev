@@ -1,64 +1,102 @@
 "use client";
 
 import { useEffect, useRef } from "react";
+import { usePathname } from "next/navigation";
 import * as THREE from "three";
 
-// Shader for animated pixelated space background
-const spaceVertexShader = `
+// Camera view configurations
+type CameraView = {
+    position: { x: number; y: number; z: number };
+    lookAt: { x: number; y: number; z: number };
+    fov: number;
+};
+
+const CAMERA_VIEWS: Record<string, CameraView> = {
+    landing: {
+        position: { x: 0, y: 0, z: 2.5 },
+        lookAt: { x: 0, y: 0, z: 0 },
+        fov: 45,
+    },
+    stargazer: {
+        position: { x: 0.5, y: 1.5, z: 2.0 },
+        lookAt: { x: 1, y: 2.5, z: -3 },
+        fov: 40,
+    },
+};
+
+const getViewForPath = (pathname: string): CameraView => {
+    return pathname === "/" ? CAMERA_VIEWS.landing : CAMERA_VIEWS.stargazer;
+};
+
+// 3D Star particle shader - renders stars with twinkle effect
+const starVertexShader = `
+attribute float aSize;
+attribute float aSeed;
+attribute vec3 aColor;
+
+uniform float uTime;
+uniform float uPixelRatio;
+
+varying vec3 vColor;
+varying float vSeed;
+
+void main() {
+    vColor = aColor;
+    vSeed = aSeed;
+
+    vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
+
+    // Size attenuation - stars get smaller with distance
+    float size = aSize * uPixelRatio * (300.0 / -mvPosition.z);
+
+    gl_PointSize = max(size, 1.0);
+    gl_Position = projectionMatrix * mvPosition;
+}
+`;
+
+const starFragmentShader = `
+uniform float uTime;
+
+varying vec3 vColor;
+varying float vSeed;
+
+void main() {
+    // Circular point shape
+    vec2 center = gl_PointCoord - 0.5;
+    float dist = length(center);
+    if (dist > 0.5) discard;
+
+    // Soft glow falloff
+    float alpha = 1.0 - smoothstep(0.0, 0.5, dist);
+
+    // Twinkle effect
+    float twinkle = 0.7 + 0.3 * sin(uTime * 2.0 + vSeed * 100.0) * cos(uTime * 1.5 + vSeed * 50.0);
+
+    gl_FragColor = vec4(vColor * twinkle, alpha * 0.8);
+}
+`;
+
+// Nebula cloud shader - volumetric-like effect on billboard planes
+const nebulaVertexShader = `
 varying vec2 vUv;
+varying vec3 vWorldPosition;
+
 void main() {
     vUv = uv;
+    vec4 worldPos = modelMatrix * vec4(position, 1.0);
+    vWorldPosition = worldPos.xyz;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }
 `;
 
-const spaceFragmentShader = `
+const nebulaFragmentShader = `
 uniform float uTime;
-uniform vec2 uResolution;
+uniform vec3 uColor;
+uniform float uOpacity;
+uniform vec2 uOffset;
+
 varying vec2 vUv;
-
-#define PI 3.14159265359
-#define LAYER_COUNT 4
-
-// Uniforms as constants
-const vec3 backgroundColor = vec3(0.005, 0.01, 0.015);
-const float density = 0.8;
-const vec2 starSpeed = vec2(0.0001, 0.0001);
-const vec2 starWave = vec2(0.1, 0.05);
-const float starSize = 2.0;
-const float starRotateSpeed = 0.1;
-const float twinkleEffect = 0.5;
-const float twinkleSpeed = 0.1;
-const float pixelateCount = 1920.0;
-const float starBrightness = 0.1; // Global star brightness multiplier
-const float starOpacity = 0.33; // Final opacity blend (0.0 - 1.0) - caps maximum star intensity
-const float starMaxIntensity = 0.5; // Clamp max star brightness for accessibility
-
-float one_div_x(float x) {
-    return (abs(x) < 0.0001) ? 1.0 : (1.0 / x);
-}
-
-float one_div_x2(float x) {
-    return one_div_x(x) * one_div_x(x);
-}
-
-float get_beta_w(float x, float f, float size) {
-    return size * x * PI / f;
-}
-
-float get_beta_h(float y, float f, float size) {
-    return size * y * PI / f;
-}
-
-// Diffraction pattern for star shape
-float get_i(vec2 uv, float f, vec2 SIZE) {
-    return one_div_x2(get_beta_w(uv.x, f, SIZE.x)) * one_div_x2(get_beta_h(uv.y, f, SIZE.y));
-}
-
-// Random function
-float random(vec2 st) {
-    return fract(sin(dot(st.xy, vec2(12.9898, 78.233))) * 43758.5453123);
-}
+varying vec3 vWorldPosition;
 
 // Hash for noise
 float hash(vec2 p) {
@@ -67,34 +105,30 @@ float hash(vec2 p) {
     return fract(p.x * p.y);
 }
 
-// Smooth value noise (for cloud shapes)
+// Smooth value noise
 float valueNoise(vec2 uv) {
     vec2 i = floor(uv);
     vec2 f = fract(uv);
-
-    // Smooth interpolation
     vec2 u = f * f * (3.0 - 2.0 * f);
 
-    // Four corners
     float a = hash(i);
     float b = hash(i + vec2(1.0, 0.0));
     float c = hash(i + vec2(0.0, 1.0));
     float d = hash(i + vec2(1.0, 1.0));
 
-    // Bilinear interpolation
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
-// FBM (Fractal Brownian Motion) for organic cloud shapes
-float fbm(vec2 uv, float time) {
+// FBM for organic cloud shapes
+float fbm(vec2 uv) {
     float n = 0.0;
     float amplitude = 0.5;
     float frequency = 1.0;
 
     for (int i = 0; i < 5; i++) {
         vec2 offset = vec2(
-            sin(time * 0.015 + float(i) * 0.7) * 0.2,
-            cos(time * 0.012 + float(i) * 1.1) * 0.15
+            sin(uTime * 0.02 + float(i) * 0.7) * 0.3,
+            cos(uTime * 0.015 + float(i) * 1.1) * 0.2
         );
         n += amplitude * valueNoise(uv * frequency + offset);
         amplitude *= 0.5;
@@ -104,132 +138,19 @@ float fbm(vec2 uv, float time) {
     return n;
 }
 
-// Pixelate a value - renders smooth shapes with chunky pixels
-float pixelateValue(float value, float levels) {
-    return floor(value * levels) / levels;
-}
-
-vec2 get_star_world_center(vec2 grid_id, vec2 time_offset, vec2 star_offset, float layer_scale) {
-    return (grid_id + star_offset + time_offset) / layer_scale;
-}
-
-vec2 rotate(vec2 uv, float add_theta) {
-    float theta = atan(uv.y, uv.x) + add_theta;
-    float r = length(uv);
-    return vec2(r * cos(theta), r * sin(theta));
-}
-
 void main() {
-    vec3 color = backgroundColor;
+    vec2 uv = vUv + uOffset;
 
-    float aspect_ratio = uResolution.x / uResolution.y;
+    // Create organic cloud shape
+    float noise = fbm(uv * 3.0);
+    noise = smoothstep(0.3, 0.7, noise);
 
-    // Pixelate UV
-    vec2 st = vUv;
-    st = round(st * pixelateCount) / pixelateCount;
-    st.x *= aspect_ratio;
+    // Fade at edges for soft blend
+    float edgeFade = 1.0 - smoothstep(0.3, 0.5, length(vUv - 0.5));
 
-    vec2 cuv = (st - 0.5) * 2.0;
+    float alpha = noise * edgeFade * uOpacity;
 
-    // === OORT CLOUDS - Organic shapes with pixelated rendering ===
-    float cloudPixelScale = 100.0; // Pixel grid for chunky rendering
-    vec2 cloudSt = vUv;
-    cloudSt = floor(cloudSt * cloudPixelScale * vec2(aspect_ratio, 1.0)) / (cloudPixelScale * vec2(aspect_ratio, 1.0));
-
-    // Cloud layer 1 - Large wispy nebula
-    float cloud1 = fbm(cloudSt * 2.5 + vec2(0.0, 0.0), uTime);
-    cloud1 = smoothstep(0.35, 0.6, cloud1); // Soft threshold for wispy edges
-    cloud1 = pixelateValue(cloud1, 8.0); // Quantize intensity for pixelated look
-    vec3 cloud1Color = vec3(0.02, 0.06, 0.08); // Deep teal
-    color += cloud1Color * cloud1 * 0.5;
-
-    // Cloud layer 2 - Mid-distance clouds
-    float cloud2 = fbm(cloudSt * 3.0 + vec2(5.2, 3.1), uTime * 0.7);
-    cloud2 = smoothstep(0.4, 0.65, cloud2);
-    cloud2 = pixelateValue(cloud2, 6.0);
-    vec3 cloud2Color = vec3(0.01, 0.04, 0.06); // Darker blue
-    color += cloud2Color * cloud2 * 0.4;
-
-    // Cloud layer 3 - Green-tinted accent nebula (hacker vibe)
-    float cloud3 = fbm(cloudSt * 2.0 + vec2(8.5, 1.7), uTime * 0.5);
-    cloud3 = smoothstep(0.42, 0.68, cloud3);
-    cloud3 = pixelateValue(cloud3, 5.0);
-    vec3 cloud3Color = vec3(0.01, 0.05, 0.03); // Dark green tint
-    color += cloud3Color * cloud3 * 0.35;
-
-    // Multi-layer star effect
-    for (int layer = 0; layer < LAYER_COUNT; layer++) {
-        float layer_scale = exp(float(layer + 1) * density);
-        vec2 layer_speed = starSpeed * (1.0 + float(layer) * 0.3);
-        float layer_size = starSize * (1.0 - float(layer) * 0.15);
-
-        vec2 layer_st = st * layer_scale;
-        vec2 cuv_st = cuv;
-
-        vec2 time_offset = uTime * layer_speed;
-        layer_st -= time_offset;
-
-        vec2 grid_st = fract(layer_st);
-        vec2 grid_id = floor(layer_st);
-
-        float rand_seed = random(grid_id);
-
-        // Star position with subtle wave motion
-        vec2 star_pos = vec2(
-            0.5 + (0.3 * sin((rand_seed * 6.28) + (uTime * starWave.x))),
-            0.5 + (0.2 * cos((rand_seed * 12.56) + (uTime * starWave.y)))
-        );
-
-        float dist = distance(grid_st, star_pos);
-        float snow_size = layer_size * 0.01 * (0.5 + 0.5 * rand_seed);
-        float brightness = 1.0 - (float(layer) * 0.25);
-
-        // Gaussian falloff
-        float m = exp((-dist * dist) / (snow_size * snow_size));
-
-        // Diffraction star pattern
-        vec2 fst = cuv_st - (get_star_world_center(grid_id, time_offset, star_pos, layer_scale) - 0.5) * 2.0;
-        fst = rotate(fst, uTime * starRotateSpeed);
-
-        float star = m * 0.5 * (get_i(fst, 0.8 - (dist * 42.0), vec2(1.0 / snow_size)) + 1.0);
-
-        // Twinkle effect
-        float twinkle = (1.0 - twinkleEffect) + twinkleEffect * (
-            sin(rand_seed * 100.0 + uTime * twinkleSpeed) *
-            cos(rand_seed * 120.0 + uTime * (twinkleSpeed + 2.0))
-        );
-        star *= twinkle;
-
-        // Color variation - bias toward cool colors with green accent
-        vec3 starColor = vec3(
-            random(grid_id - 3.0) * 0.4,
-            random(grid_id + 7.0) * 0.6 + 0.4,
-            random(grid_id + 5.0) * 0.5 + 0.5
-        );
-
-        // Some stars get the hacker green
-        if (random(grid_id * 2.0) > 0.85) {
-            starColor = vec3(0.2, 0.9, 0.5);
-        }
-
-        // Calculate star contribution with brightness control
-        vec3 starContribution = (star * brightness * starBrightness) * starColor;
-
-        // Clamp max intensity for accessibility (prevents harsh bright spikes)
-        starContribution = min(starContribution, vec3(starMaxIntensity));
-
-        // Apply opacity blend
-        starContribution *= starOpacity;
-
-        color = max(color + starContribution, color);
-    }
-
-    // Subtle vignette
-    float vignette = 1.0 - length((vUv - 0.5) * 1.1);
-    vignette = smoothstep(0.0, 0.8, vignette);
-    color *= vignette * 0.7 + 0.3;
-
-    gl_FragColor = vec4(color, 1.0);
+    gl_FragColor = vec4(uColor, alpha);
 }
 `;
 
@@ -601,6 +522,15 @@ export function Globe() {
     const landTextureRef = useRef<THREE.CanvasTexture | null>(null);
     const cityLightsTextureRef = useRef<THREE.CanvasTexture | null>(null);
 
+    // Track pathname for camera transitions
+    const pathname = usePathname();
+    const pathnameRef = useRef(pathname);
+
+    // Update ref when pathname changes
+    useEffect(() => {
+        pathnameRef.current = pathname;
+    }, [pathname]);
+
     useEffect(() => {
         if (!containerRef.current) return;
 
@@ -608,6 +538,7 @@ export function Globe() {
 
         // Scene setup
         const scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x010203); // Deep space dark blue-black
 
         // Camera
         const camera = new THREE.PerspectiveCamera(
@@ -629,27 +560,115 @@ export function Globe() {
         container.appendChild(renderer.domElement);
         rendererRef.current = renderer;
 
-        // Space background shader
-        const spaceUniforms = {
+        // === 3D STAR FIELD ===
+        const starCount = 3000;
+        const starPositions = new Float32Array(starCount * 3);
+        const starSizes = new Float32Array(starCount);
+        const starSeeds = new Float32Array(starCount);
+        const starColors = new Float32Array(starCount * 3);
+
+        // Distribute stars in a large sphere around the scene
+        const STAR_SPHERE_RADIUS = 50;
+        for (let i = 0; i < starCount; i++) {
+            // Random position on sphere surface
+            const theta = Math.random() * Math.PI * 2;
+            const phi = Math.acos(2 * Math.random() - 1);
+            const r = STAR_SPHERE_RADIUS * (0.5 + Math.random() * 0.5);
+
+            starPositions[i * 3] = r * Math.sin(phi) * Math.cos(theta);
+            starPositions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
+            starPositions[i * 3 + 2] = r * Math.cos(phi);
+
+            // Random size (some stars bigger/brighter)
+            starSizes[i] = 0.5 + Math.random() * 2.0;
+
+            // Random seed for twinkle timing
+            starSeeds[i] = Math.random();
+
+            // Color variation - mostly cool colors with some green accent
+            const colorRand = Math.random();
+            if (colorRand > 0.85) {
+                // Hacker green stars (15%)
+                starColors[i * 3] = 0.2;
+                starColors[i * 3 + 1] = 0.9;
+                starColors[i * 3 + 2] = 0.5;
+            } else if (colorRand > 0.7) {
+                // Warm white stars (15%)
+                starColors[i * 3] = 0.9;
+                starColors[i * 3 + 1] = 0.85;
+                starColors[i * 3 + 2] = 0.7;
+            } else {
+                // Cool blue-white stars (70%)
+                starColors[i * 3] = 0.6 + Math.random() * 0.3;
+                starColors[i * 3 + 1] = 0.7 + Math.random() * 0.3;
+                starColors[i * 3 + 2] = 0.9 + Math.random() * 0.1;
+            }
+        }
+
+        const starGeometry = new THREE.BufferGeometry();
+        starGeometry.setAttribute("position", new THREE.BufferAttribute(starPositions, 3));
+        starGeometry.setAttribute("aSize", new THREE.BufferAttribute(starSizes, 1));
+        starGeometry.setAttribute("aSeed", new THREE.BufferAttribute(starSeeds, 1));
+        starGeometry.setAttribute("aColor", new THREE.BufferAttribute(starColors, 3));
+
+        const starUniforms = {
             uTime: { value: 0 },
-            uResolution: { value: new THREE.Vector2(container.clientWidth, container.clientHeight) },
+            uPixelRatio: { value: Math.min(window.devicePixelRatio, 2) },
         };
 
-        const spaceMaterial = new THREE.ShaderMaterial({
-            vertexShader: spaceVertexShader,
-            fragmentShader: spaceFragmentShader,
-            uniforms: spaceUniforms,
+        const starMaterial = new THREE.ShaderMaterial({
+            vertexShader: starVertexShader,
+            fragmentShader: starFragmentShader,
+            uniforms: starUniforms,
+            transparent: true,
             depthWrite: false,
+            blending: THREE.AdditiveBlending,
         });
 
-        const spaceGeometry = new THREE.PlaneGeometry(2, 2);
-        const spaceMesh = new THREE.Mesh(spaceGeometry, spaceMaterial);
-        spaceMesh.renderOrder = -1;
+        const stars = new THREE.Points(starGeometry, starMaterial);
+        scene.add(stars);
 
-        // Create a separate scene for background to render it fullscreen
-        const bgScene = new THREE.Scene();
-        const bgCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1);
-        bgScene.add(spaceMesh);
+        // === 3D NEBULA CLOUDS ===
+        // Create multiple billboard planes at different depths for volumetric effect
+        const nebulaGroup = new THREE.Group();
+        scene.add(nebulaGroup);
+
+        const nebulaConfigs = [
+            { position: new THREE.Vector3(-15, 8, -30), scale: 25, color: new THREE.Color(0.02, 0.06, 0.08), opacity: 0.15, offset: [0, 0] },
+            { position: new THREE.Vector3(20, -5, -25), scale: 20, color: new THREE.Color(0.01, 0.04, 0.06), opacity: 0.12, offset: [5.2, 3.1] },
+            { position: new THREE.Vector3(-8, 12, -35), scale: 30, color: new THREE.Color(0.01, 0.05, 0.03), opacity: 0.1, offset: [8.5, 1.7] },
+            { position: new THREE.Vector3(12, 15, -40), scale: 35, color: new THREE.Color(0.03, 0.05, 0.06), opacity: 0.08, offset: [2.3, 4.5] },
+            { position: new THREE.Vector3(-20, -10, -28), scale: 22, color: new THREE.Color(0.02, 0.04, 0.05), opacity: 0.1, offset: [7.1, 2.2] },
+        ];
+
+        const nebulaMeshes: THREE.Mesh[] = [];
+        const nebulaUniformsList: { uTime: { value: number }; uColor: { value: THREE.Color }; uOpacity: { value: number }; uOffset: { value: THREE.Vector2 } }[] = [];
+
+        nebulaConfigs.forEach((config) => {
+            const nebulaUniforms = {
+                uTime: { value: 0 },
+                uColor: { value: config.color },
+                uOpacity: { value: config.opacity },
+                uOffset: { value: new THREE.Vector2(config.offset[0], config.offset[1]) },
+            };
+            nebulaUniformsList.push(nebulaUniforms);
+
+            const nebulaMaterial = new THREE.ShaderMaterial({
+                vertexShader: nebulaVertexShader,
+                fragmentShader: nebulaFragmentShader,
+                uniforms: nebulaUniforms,
+                transparent: true,
+                depthWrite: false,
+                side: THREE.DoubleSide,
+                blending: THREE.AdditiveBlending,
+            });
+
+            const nebulaGeometry = new THREE.PlaneGeometry(config.scale, config.scale);
+            const nebulaMesh = new THREE.Mesh(nebulaGeometry, nebulaMaterial);
+            nebulaMesh.position.copy(config.position);
+            nebulaMeshes.push(nebulaMesh);
+            nebulaGroup.add(nebulaMesh);
+        });
 
         // Globe geometry
         const GLOBE_RADIUS = 0.8;
@@ -752,131 +771,9 @@ export function Globe() {
         const particles = new THREE.Points(particlesGeometry, particlesMaterial);
         globeGroup.add(particles);
 
-        // === INTERACTIVE DRAG CONTROLS ===
-        // Raycaster for detecting globe interactions
-        const raycaster = new THREE.Raycaster();
-        const mouse = new THREE.Vector2();
-
-        // Drag state
-        let isDragging = false;
-        let previousMousePosition = { x: 0, y: 0 };
-        let velocityX = 0;
-        let velocityY = 0;
-        let userRotationX = 0; // Accumulated user rotation (pitch)
-        let userRotationY = 0; // Accumulated user rotation (yaw)
-        let lastInteractionTime = 0;
-        const FRICTION = 0.95; // Momentum decay
-        const REALIGN_DELAY = 2000; // ms before starting to realign
-        const REALIGN_SPEED = 0.02; // How fast to realign (0-1, lower = slower)
-        const DRAG_SENSITIVITY = 0.005;
-
-        // Check if mouse/touch is over the globe
-        const isOverGlobe = (clientX: number, clientY: number): boolean => {
-            const rect = renderer.domElement.getBoundingClientRect();
-            mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
-            mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
-
-            raycaster.setFromCamera(mouse, camera);
-            const intersects = raycaster.intersectObject(globe);
-            return intersects.length > 0;
-        };
-
-        // Mouse event handlers - use document level to work with pointer-events: none
-        const onMouseDown = (event: MouseEvent) => {
-            if (isOverGlobe(event.clientX, event.clientY)) {
-                event.preventDefault();
-                event.stopPropagation();
-                isDragging = true;
-                previousMousePosition = { x: event.clientX, y: event.clientY };
-                velocityX = 0;
-                velocityY = 0;
-                document.body.style.cursor = "grabbing";
-            }
-        };
-
-        const onMouseMove = (event: MouseEvent) => {
-            if (!isDragging) {
-                // Update cursor when hovering over globe
-                if (isOverGlobe(event.clientX, event.clientY)) {
-                    document.body.style.cursor = "grab";
-                } else {
-                    document.body.style.cursor = "";
-                }
-                return;
-            }
-
-            event.preventDefault();
-            const deltaX = event.clientX - previousMousePosition.x;
-            const deltaY = event.clientY - previousMousePosition.y;
-
-            // Update velocity for momentum
-            velocityX = deltaX * DRAG_SENSITIVITY;
-            velocityY = deltaY * DRAG_SENSITIVITY;
-
-            // Apply rotation
-            userRotationY += velocityX;
-            userRotationX += velocityY;
-
-            // Clamp vertical rotation to prevent flipping
-            userRotationX = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, userRotationX));
-
-            previousMousePosition = { x: event.clientX, y: event.clientY };
-            lastInteractionTime = performance.now();
-        };
-
-        const onMouseUp = () => {
-            if (isDragging) {
-                isDragging = false;
-                lastInteractionTime = performance.now();
-                document.body.style.cursor = "";
-            }
-        };
-
-        // Touch event handlers
-        const onTouchStart = (event: TouchEvent) => {
-            if (event.touches.length === 1) {
-                const touch = event.touches[0];
-                if (isOverGlobe(touch.clientX, touch.clientY)) {
-                    isDragging = true;
-                    previousMousePosition = { x: touch.clientX, y: touch.clientY };
-                    velocityX = 0;
-                    velocityY = 0;
-                }
-            }
-        };
-
-        const onTouchMove = (event: TouchEvent) => {
-            if (!isDragging || event.touches.length !== 1) return;
-
-            const touch = event.touches[0];
-            const deltaX = touch.clientX - previousMousePosition.x;
-            const deltaY = touch.clientY - previousMousePosition.y;
-
-            velocityX = deltaX * DRAG_SENSITIVITY;
-            velocityY = deltaY * DRAG_SENSITIVITY;
-
-            userRotationY += velocityX;
-            userRotationX += velocityY;
-            userRotationX = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, userRotationX));
-
-            previousMousePosition = { x: touch.clientX, y: touch.clientY };
-            lastInteractionTime = performance.now();
-        };
-
-        const onTouchEnd = () => {
-            if (isDragging) {
-                isDragging = false;
-                lastInteractionTime = performance.now();
-            }
-        };
-
-        // Add event listeners at document level (canvas has pointer-events: none)
-        document.addEventListener("mousedown", onMouseDown, true);
-        document.addEventListener("mousemove", onMouseMove, true);
-        document.addEventListener("mouseup", onMouseUp, true);
-        document.addEventListener("touchstart", onTouchStart, { passive: true, capture: true });
-        document.addEventListener("touchmove", onTouchMove, { passive: true, capture: true });
-        document.addEventListener("touchend", onTouchEnd, true);
+        // Camera tweening state
+        const currentLookAt = new THREE.Vector3(0, 0, 0);
+        const LERP_FACTOR = 0.03;
 
         // Animation
         let animationId: number;
@@ -886,51 +783,50 @@ export function Globe() {
             animationId = requestAnimationFrame(animate);
 
             const elapsed = clock.getElapsedTime();
-            const now = performance.now();
 
             // Update shaders
-            spaceUniforms.uTime.value = elapsed;
+            starUniforms.uTime.value = elapsed;
             globeUniforms.uTime.value = elapsed;
 
-            // Apply momentum when not dragging
-            if (!isDragging) {
-                userRotationY += velocityX;
-                userRotationX += velocityY;
-                userRotationX = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, userRotationX));
+            // Update nebula uniforms
+            nebulaUniformsList.forEach((uniforms) => {
+                uniforms.uTime.value = elapsed;
+            });
 
-                // Apply friction to slow down
-                velocityX *= FRICTION;
-                velocityY *= FRICTION;
+            // Make nebula clouds face the camera (billboard effect)
+            nebulaMeshes.forEach((mesh) => {
+                mesh.lookAt(camera.position);
+            });
 
-                // Stop very small velocities
-                if (Math.abs(velocityX) < 0.0001) velocityX = 0;
-                if (Math.abs(velocityY) < 0.0001) velocityY = 0;
+            // Camera tweening based on current route
+            const targetView = getViewForPath(pathnameRef.current);
 
-                // Realign to original rotation after delay
-                const timeSinceInteraction = now - lastInteractionTime;
-                if (timeSinceInteraction > REALIGN_DELAY && velocityX === 0 && velocityY === 0) {
-                    // Smoothly interpolate back to zero
-                    userRotationX *= (1 - REALIGN_SPEED);
-                    userRotationY *= (1 - REALIGN_SPEED);
+            // Lerp camera position
+            camera.position.x += (targetView.position.x - camera.position.x) * LERP_FACTOR;
+            camera.position.y += (targetView.position.y - camera.position.y) * LERP_FACTOR;
+            camera.position.z += (targetView.position.z - camera.position.z) * LERP_FACTOR;
 
-                    // Snap to zero when close enough
-                    if (Math.abs(userRotationX) < 0.001) userRotationX = 0;
-                    if (Math.abs(userRotationY) < 0.001) userRotationY = 0;
-                }
-            }
+            // Lerp lookAt target
+            currentLookAt.x += (targetView.lookAt.x - currentLookAt.x) * LERP_FACTOR;
+            currentLookAt.y += (targetView.lookAt.y - currentLookAt.y) * LERP_FACTOR;
+            currentLookAt.z += (targetView.lookAt.z - currentLookAt.z) * LERP_FACTOR;
+            camera.lookAt(currentLookAt);
 
-            // Base rotation (auto-spin) + user rotation
+            // Lerp FOV
+            camera.fov += (targetView.fov - camera.fov) * LERP_FACTOR;
+            camera.updateProjectionMatrix();
+
+            // Base rotation (auto-spin)
             const baseRotation = elapsed * 0.08;
-            globe.rotation.y = baseRotation + userRotationY;
-            globe.rotation.x = userRotationX;
+            globe.rotation.y = baseRotation;
 
             // Particles drift opposite
             particles.rotation.y = -elapsed * 0.03;
 
-            // Render background first, then main scene
-            renderer.autoClear = false;
-            renderer.clear();
-            renderer.render(bgScene, bgCamera);
+            // Slow rotation for stars to add subtle movement
+            stars.rotation.y = elapsed * 0.005;
+
+            // Render scene
             renderer.render(scene, camera);
         };
 
@@ -943,7 +839,7 @@ export function Globe() {
             camera.aspect = container.clientWidth / container.clientHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(container.clientWidth, container.clientHeight);
-            spaceUniforms.uResolution.value.set(container.clientWidth, container.clientHeight);
+            starUniforms.uPixelRatio.value = Math.min(window.devicePixelRatio, 2);
         };
 
         window.addEventListener("resize", handleResize);
@@ -952,14 +848,6 @@ export function Globe() {
         return () => {
             window.removeEventListener("resize", handleResize);
             cancelAnimationFrame(animationId);
-
-            // Remove drag event listeners
-            document.removeEventListener("mousedown", onMouseDown, true);
-            document.removeEventListener("mousemove", onMouseMove, true);
-            document.removeEventListener("mouseup", onMouseUp, true);
-            document.removeEventListener("touchstart", onTouchStart, true);
-            document.removeEventListener("touchmove", onTouchMove, true);
-            document.removeEventListener("touchend", onTouchEnd, true);
 
             if (rendererRef.current && container) {
                 container.removeChild(rendererRef.current.domElement);
@@ -972,8 +860,14 @@ export function Globe() {
             ringMaterial.dispose();
             particlesGeometry.dispose();
             particlesMaterial.dispose();
-            spaceGeometry.dispose();
-            spaceMaterial.dispose();
+            starGeometry.dispose();
+            starMaterial.dispose();
+
+            // Dispose nebula resources
+            nebulaMeshes.forEach((mesh) => {
+                mesh.geometry.dispose();
+                (mesh.material as THREE.ShaderMaterial).dispose();
+            });
 
             if (landTextureRef.current) {
                 landTextureRef.current.dispose();

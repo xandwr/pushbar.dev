@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
 import { Navbar } from "./components/navbar";
+import { Globe } from "./components/globe";
 
 const geistSans = Geist({
     variable: "--font-geist-sans",
@@ -28,8 +29,12 @@ export default function RootLayout({
             <body
                 className={`${geistSans.variable} ${geistMono.variable} antialiased bg-black text-zinc-100`}
             >
+                {/* Persistent 3D background */}
+                <div className="fixed inset-0 z-0">
+                    <Globe />
+                </div>
                 <Navbar />
-                <main className="pt-14">{children}</main>
+                <main className="relative z-10 pt-14">{children}</main>
             </body>
         </html>
     );

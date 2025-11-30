@@ -1,15 +1,6 @@
-import { Globe } from "./components/globe";
-
 export default function Home() {
     return (
         <div className="relative min-h-screen overflow-hidden">
-            {/* Globe Background */}
-            <div className="absolute inset-0 flex items-center justify-center">
-                <div className="w-full h-full max-w-4xl">
-                    <Globe />
-                </div>
-            </div>
-
             {/* Hero Content */}
             <div className="relative z-10 flex flex-col items-center justify-center min-h-screen px-4">
                 <h1 className="text-5xl md:text-7xl font-mono font-bold text-zinc-100 mb-4 text-center">
