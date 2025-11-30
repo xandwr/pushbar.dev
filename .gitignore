@@ -41,6 +41,3 @@ yarn-error.log*
 *.tsbuildinfo
 next-env.d.ts
 
-public/assets/ne_10m_urban_areas_landscan.json
-public/assets/ne_50m_coastline.json
-public/assets/ne_50m_land.jsonpublic/assets/ne_10m_urban_areas_landscan.json
