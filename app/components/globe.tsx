@@ -238,28 +238,37 @@ const globeVertexShader = `
 varying vec2 vUv;
 varying vec3 vNormal;
 varying vec3 vPosition;
+varying vec3 vWorldPosition;
 
 void main() {
     vUv = uv;
     vNormal = normalize(normalMatrix * normal);
     vPosition = position;
+    vec4 worldPos = modelMatrix * vec4(position, 1.0);
+    vWorldPosition = worldPos.xyz;
     gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
 }
 `;
 
 const globeFragmentShader = `
 uniform sampler2D uLandMask;
+uniform sampler2D uCityLights;
 uniform float uTime;
 
 varying vec2 vUv;
 varying vec3 vNormal;
 varying vec3 vPosition;
+varying vec3 vWorldPosition;
 
 // Colors
 const vec3 oceanColor = vec3(0.02, 0.04, 0.06);
 const vec3 landColor = vec3(0.03, 0.06, 0.04);
 const vec3 coastlineColor = vec3(0.063, 0.725, 0.506); // #10b981
 const vec3 gridColor = vec3(0.063, 0.725, 0.506);
+
+// City light colors - BO2 style orange/yellow glow
+const vec3 cityLightColor = vec3(1.0, 0.7, 0.3);
+const vec3 cityLightColorAlt = vec3(0.063, 0.725, 0.506); // Green accent for some cities
 
 // Hash for noise
 float hash(vec2 p) {
@@ -282,9 +291,29 @@ float noise(vec2 uv) {
     return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
 }
 
+// BO2-style reactive light flicker
+float cityFlicker(vec2 uv, float time, float intensity) {
+    // Multiple frequency flickers for realistic light variation
+    float flicker1 = sin(time * 3.0 + hash(uv * 100.0) * 6.28) * 0.15;
+    float flicker2 = sin(time * 7.0 + hash(uv * 200.0) * 6.28) * 0.1;
+    float flicker3 = sin(time * 0.5 + hash(uv * 50.0) * 6.28) * 0.2;
+
+    // Random on/off pattern - some lights turn off momentarily
+    float onOff = step(0.03, hash(floor(uv * 500.0) + floor(time * 0.5)));
+
+    // Combine flickers with base intensity
+    float base = 0.7 + flicker1 + flicker2 + flicker3;
+    return base * onOff * intensity;
+}
+
 void main() {
     // Sample land mask
     float land = texture2D(uLandMask, vUv).r;
+
+    // Sample city lights texture (R = intensity, G = population density for brightness)
+    vec4 cityData = texture2D(uCityLights, vUv);
+    float cityIntensity = cityData.r;
+    float populationDensity = cityData.g;
 
     // Detect edges for coastline glow
     float texelSize = 1.0 / 2048.0;
@@ -314,6 +343,26 @@ void main() {
         float gridLine = min(grid.x, grid.y);
         float gridMask = 1.0 - smoothstep(0.0, 1.5, gridLine);
         color += gridColor * gridMask * 0.08;
+    }
+
+    // === CITY LIGHTS - BO2 Style ===
+    if (cityIntensity > 0.01) {
+        // Apply flicker effect based on position and time
+        float flicker = cityFlicker(vUv, uTime, populationDensity);
+
+        // Mix between orange and green based on hash for variety
+        float colorMix = step(0.7, hash(floor(vUv * 200.0)));
+        vec3 lightColor = mix(cityLightColor, cityLightColorAlt, colorMix);
+
+        // Brighter core with softer glow falloff
+        float lightStrength = cityIntensity * flicker * 1.5;
+
+        // Add bloom/glow effect around bright areas
+        float glow = cityIntensity * populationDensity * 0.3;
+
+        // Apply city lights
+        color += lightColor * lightStrength;
+        color += lightColor * glow * 0.5;
     }
 
     // Coastline glow
@@ -432,10 +481,125 @@ function drawPolygon(
     ctx.fill("evenodd");
 }
 
+// Urban area GeoJSON feature type
+type UrbanFeature = {
+    type: "Feature";
+    geometry: GeoJSONGeometry;
+    properties: {
+        name_conve?: string;
+        max_pop_al?: number;
+        max_pop_20?: number;
+    };
+};
+
+type UrbanGeoJSON = {
+    type: "FeatureCollection";
+    features: UrbanFeature[];
+};
+
+// Create city lights texture from urban areas GeoJSON
+// R channel = light intensity (presence of urban area)
+// G channel = population density (normalized, for brightness variation)
+function createCityLightsTexture(geojson: UrbanGeoJSON, width: number = 2048, height: number = 1024): THREE.CanvasTexture {
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d")!;
+
+    // Start with black (no lights)
+    ctx.fillStyle = "#000000";
+    ctx.fillRect(0, 0, width, height);
+
+    // Find max population for normalization
+    let maxPop = 0;
+    geojson.features.forEach((feature) => {
+        const pop = feature.properties?.max_pop_al || feature.properties?.max_pop_20 || 0;
+        if (pop > maxPop) maxPop = pop;
+    });
+
+    // Convert lon/lat to canvas coordinates
+    const lonLatToCanvas = (lon: number, lat: number): [number, number] => {
+        const x = ((lon + 180) / 360) * width;
+        const y = ((90 - lat) / 180) * height;
+        return [x, y];
+    };
+
+    // Draw each urban area with intensity based on population
+    geojson.features.forEach((feature) => {
+        const { geometry, properties } = feature;
+
+        // Skip features with null/missing geometry
+        if (!geometry) return;
+
+        const pop = properties?.max_pop_al || properties?.max_pop_20 || 1000;
+
+        // Normalize population to 0-1 range (using log scale for better distribution)
+        const normalizedPop = Math.min(1.0, Math.log10(pop + 1) / Math.log10(maxPop + 1));
+
+        // R channel: full brightness for any urban area
+        // G channel: population-based intensity for flicker strength
+        const r = 255;
+        const g = Math.floor(normalizedPop * 255);
+        const b = 0;
+
+        ctx.fillStyle = `rgb(${r}, ${g}, ${b})`;
+
+        if (geometry.type === "Polygon") {
+            const rings = geometry.coordinates as number[][][];
+            drawCityPolygon(ctx, rings, lonLatToCanvas);
+        } else if (geometry.type === "MultiPolygon") {
+            const polygons = geometry.coordinates as number[][][][];
+            polygons.forEach((rings) => {
+                drawCityPolygon(ctx, rings, lonLatToCanvas);
+            });
+        }
+    });
+
+    // Apply a slight blur for glow effect
+    ctx.filter = "blur(2px)";
+    ctx.drawImage(canvas, 0, 0);
+    ctx.filter = "none";
+
+    const texture = new THREE.CanvasTexture(canvas);
+    texture.wrapS = THREE.RepeatWrapping;
+    texture.wrapT = THREE.ClampToEdgeWrapping;
+    texture.minFilter = THREE.LinearFilter;
+    texture.magFilter = THREE.LinearFilter;
+
+    return texture;
+}
+
+// Draw a city polygon (simplified version without hole handling for performance)
+function drawCityPolygon(
+    ctx: CanvasRenderingContext2D,
+    rings: number[][][],
+    lonLatToCanvas: (lon: number, lat: number) => [number, number]
+) {
+    if (rings.length === 0) return;
+
+    ctx.beginPath();
+
+    // Outer ring
+    const outerRing = rings[0];
+    if (outerRing.length > 0) {
+        const [startX, startY] = lonLatToCanvas(outerRing[0][0], outerRing[0][1]);
+        ctx.moveTo(startX, startY);
+
+        for (let i = 1; i < outerRing.length; i++) {
+            const [x, y] = lonLatToCanvas(outerRing[i][0], outerRing[i][1]);
+            ctx.lineTo(x, y);
+        }
+        ctx.closePath();
+    }
+
+    ctx.fill();
+}
+
 export function Globe() {
     const containerRef = useRef<HTMLDivElement>(null);
     const rendererRef = useRef<THREE.WebGLRenderer | null>(null);
     const landTextureRef = useRef<THREE.CanvasTexture | null>(null);
+    const cityLightsTextureRef = useRef<THREE.CanvasTexture | null>(null);
 
     useEffect(() => {
         if (!containerRef.current) return;
@@ -461,6 +625,7 @@ export function Globe() {
         });
         renderer.setSize(container.clientWidth, container.clientHeight);
         renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+        renderer.domElement.style.pointerEvents = "none"; // Canvas doesn't capture events
         container.appendChild(renderer.domElement);
         rendererRef.current = renderer;
 
@@ -493,6 +658,7 @@ export function Globe() {
         // Globe shader uniforms - will be updated when land data loads
         const globeUniforms = {
             uLandMask: { value: new THREE.Texture() },
+            uCityLights: { value: new THREE.Texture() },
             uTime: { value: 0 },
         };
 
@@ -529,6 +695,21 @@ export function Globe() {
                 globeUniforms.uLandMask.value = landTexture;
             })
             .catch((err) => console.error("Failed to load land data:", err));
+
+        // Load urban areas data for city lights (BO2-style)
+        fetch("/assets/ne_10m_urban_areas_landscan.json")
+            .then((res) => {
+                if (!res.ok) {
+                    throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+                }
+                return res.json();
+            })
+            .then((geojson: UrbanGeoJSON) => {
+                const cityLightsTexture = createCityLightsTexture(geojson);
+                cityLightsTextureRef.current = cityLightsTexture;
+                globeUniforms.uCityLights.value = cityLightsTexture;
+            })
+            .catch((err) => console.error("Failed to load urban areas data:", err));
 
         // Outer glow ring (tilted with globe)
         const ringGeometry = new THREE.RingGeometry(GLOBE_RADIUS + 0.005, GLOBE_RADIUS + 0.01, 64);
@@ -571,6 +752,132 @@ export function Globe() {
         const particles = new THREE.Points(particlesGeometry, particlesMaterial);
         globeGroup.add(particles);
 
+        // === INTERACTIVE DRAG CONTROLS ===
+        // Raycaster for detecting globe interactions
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+
+        // Drag state
+        let isDragging = false;
+        let previousMousePosition = { x: 0, y: 0 };
+        let velocityX = 0;
+        let velocityY = 0;
+        let userRotationX = 0; // Accumulated user rotation (pitch)
+        let userRotationY = 0; // Accumulated user rotation (yaw)
+        let lastInteractionTime = 0;
+        const FRICTION = 0.95; // Momentum decay
+        const REALIGN_DELAY = 2000; // ms before starting to realign
+        const REALIGN_SPEED = 0.02; // How fast to realign (0-1, lower = slower)
+        const DRAG_SENSITIVITY = 0.005;
+
+        // Check if mouse/touch is over the globe
+        const isOverGlobe = (clientX: number, clientY: number): boolean => {
+            const rect = renderer.domElement.getBoundingClientRect();
+            mouse.x = ((clientX - rect.left) / rect.width) * 2 - 1;
+            mouse.y = -((clientY - rect.top) / rect.height) * 2 + 1;
+
+            raycaster.setFromCamera(mouse, camera);
+            const intersects = raycaster.intersectObject(globe);
+            return intersects.length > 0;
+        };
+
+        // Mouse event handlers - use document level to work with pointer-events: none
+        const onMouseDown = (event: MouseEvent) => {
+            if (isOverGlobe(event.clientX, event.clientY)) {
+                event.preventDefault();
+                event.stopPropagation();
+                isDragging = true;
+                previousMousePosition = { x: event.clientX, y: event.clientY };
+                velocityX = 0;
+                velocityY = 0;
+                document.body.style.cursor = "grabbing";
+            }
+        };
+
+        const onMouseMove = (event: MouseEvent) => {
+            if (!isDragging) {
+                // Update cursor when hovering over globe
+                if (isOverGlobe(event.clientX, event.clientY)) {
+                    document.body.style.cursor = "grab";
+                } else {
+                    document.body.style.cursor = "";
+                }
+                return;
+            }
+
+            event.preventDefault();
+            const deltaX = event.clientX - previousMousePosition.x;
+            const deltaY = event.clientY - previousMousePosition.y;
+
+            // Update velocity for momentum
+            velocityX = deltaX * DRAG_SENSITIVITY;
+            velocityY = deltaY * DRAG_SENSITIVITY;
+
+            // Apply rotation
+            userRotationY += velocityX;
+            userRotationX += velocityY;
+
+            // Clamp vertical rotation to prevent flipping
+            userRotationX = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, userRotationX));
+
+            previousMousePosition = { x: event.clientX, y: event.clientY };
+            lastInteractionTime = performance.now();
+        };
+
+        const onMouseUp = () => {
+            if (isDragging) {
+                isDragging = false;
+                lastInteractionTime = performance.now();
+                document.body.style.cursor = "";
+            }
+        };
+
+        // Touch event handlers
+        const onTouchStart = (event: TouchEvent) => {
+            if (event.touches.length === 1) {
+                const touch = event.touches[0];
+                if (isOverGlobe(touch.clientX, touch.clientY)) {
+                    isDragging = true;
+                    previousMousePosition = { x: touch.clientX, y: touch.clientY };
+                    velocityX = 0;
+                    velocityY = 0;
+                }
+            }
+        };
+
+        const onTouchMove = (event: TouchEvent) => {
+            if (!isDragging || event.touches.length !== 1) return;
+
+            const touch = event.touches[0];
+            const deltaX = touch.clientX - previousMousePosition.x;
+            const deltaY = touch.clientY - previousMousePosition.y;
+
+            velocityX = deltaX * DRAG_SENSITIVITY;
+            velocityY = deltaY * DRAG_SENSITIVITY;
+
+            userRotationY += velocityX;
+            userRotationX += velocityY;
+            userRotationX = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, userRotationX));
+
+            previousMousePosition = { x: touch.clientX, y: touch.clientY };
+            lastInteractionTime = performance.now();
+        };
+
+        const onTouchEnd = () => {
+            if (isDragging) {
+                isDragging = false;
+                lastInteractionTime = performance.now();
+            }
+        };
+
+        // Add event listeners at document level (canvas has pointer-events: none)
+        document.addEventListener("mousedown", onMouseDown, true);
+        document.addEventListener("mousemove", onMouseMove, true);
+        document.addEventListener("mouseup", onMouseUp, true);
+        document.addEventListener("touchstart", onTouchStart, { passive: true, capture: true });
+        document.addEventListener("touchmove", onTouchMove, { passive: true, capture: true });
+        document.addEventListener("touchend", onTouchEnd, true);
+
         // Animation
         let animationId: number;
         const clock = new THREE.Clock();
@@ -579,14 +886,43 @@ export function Globe() {
             animationId = requestAnimationFrame(animate);
 
             const elapsed = clock.getElapsedTime();
+            const now = performance.now();
 
             // Update shaders
             spaceUniforms.uTime.value = elapsed;
             globeUniforms.uTime.value = elapsed;
 
-            // Rotate globe
-            const rotation = elapsed * 0.08;
-            globe.rotation.y = rotation;
+            // Apply momentum when not dragging
+            if (!isDragging) {
+                userRotationY += velocityX;
+                userRotationX += velocityY;
+                userRotationX = Math.max(-Math.PI / 3, Math.min(Math.PI / 3, userRotationX));
+
+                // Apply friction to slow down
+                velocityX *= FRICTION;
+                velocityY *= FRICTION;
+
+                // Stop very small velocities
+                if (Math.abs(velocityX) < 0.0001) velocityX = 0;
+                if (Math.abs(velocityY) < 0.0001) velocityY = 0;
+
+                // Realign to original rotation after delay
+                const timeSinceInteraction = now - lastInteractionTime;
+                if (timeSinceInteraction > REALIGN_DELAY && velocityX === 0 && velocityY === 0) {
+                    // Smoothly interpolate back to zero
+                    userRotationX *= (1 - REALIGN_SPEED);
+                    userRotationY *= (1 - REALIGN_SPEED);
+
+                    // Snap to zero when close enough
+                    if (Math.abs(userRotationX) < 0.001) userRotationX = 0;
+                    if (Math.abs(userRotationY) < 0.001) userRotationY = 0;
+                }
+            }
+
+            // Base rotation (auto-spin) + user rotation
+            const baseRotation = elapsed * 0.08;
+            globe.rotation.y = baseRotation + userRotationY;
+            globe.rotation.x = userRotationX;
 
             // Particles drift opposite
             particles.rotation.y = -elapsed * 0.03;
@@ -617,6 +953,14 @@ export function Globe() {
             window.removeEventListener("resize", handleResize);
             cancelAnimationFrame(animationId);
 
+            // Remove drag event listeners
+            document.removeEventListener("mousedown", onMouseDown, true);
+            document.removeEventListener("mousemove", onMouseMove, true);
+            document.removeEventListener("mouseup", onMouseUp, true);
+            document.removeEventListener("touchstart", onTouchStart, true);
+            document.removeEventListener("touchmove", onTouchMove, true);
+            document.removeEventListener("touchend", onTouchEnd, true);
+
             if (rendererRef.current && container) {
                 container.removeChild(rendererRef.current.domElement);
                 rendererRef.current.dispose();
@@ -634,13 +978,16 @@ export function Globe() {
             if (landTextureRef.current) {
                 landTextureRef.current.dispose();
             }
+            if (cityLightsTextureRef.current) {
+                cityLightsTextureRef.current.dispose();
+            }
         };
     }, []);
 
     return (
         <div
             ref={containerRef}
-            className="absolute inset-0 w-full h-full"
+            className="absolute inset-0 w-full h-full pointer-events-none"
             style={{ zIndex: 0 }}
         />
     );
