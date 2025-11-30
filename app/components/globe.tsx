@@ -39,6 +39,7 @@ uniform float uPixelRatio;
 
 varying vec3 vColor;
 varying float vSeed;
+varying float vSize;
 
 void main() {
     vColor = aColor;
@@ -46,10 +47,12 @@ void main() {
 
     vec4 mvPosition = modelViewMatrix * vec4(position, 1.0);
 
-    // Size attenuation - stars get smaller with distance
-    float size = aSize * uPixelRatio * (300.0 / -mvPosition.z);
+    // Size attenuation - smaller base, gentler falloff with distance
+    float size = aSize * uPixelRatio * (80.0 / -mvPosition.z);
+    size = clamp(size, 1.0, 4.0);
+    vSize = size;
 
-    gl_PointSize = max(size, 1.0);
+    gl_PointSize = size;
     gl_Position = projectionMatrix * mvPosition;
 }
 `;
@@ -59,20 +62,116 @@ uniform float uTime;
 
 varying vec3 vColor;
 varying float vSeed;
+varying float vSize;
 
 void main() {
-    // Circular point shape
     vec2 center = gl_PointCoord - 0.5;
     float dist = length(center);
-    if (dist > 0.5) discard;
 
-    // Soft glow falloff
-    float alpha = 1.0 - smoothstep(0.0, 0.5, dist);
+    // Sharp circular core with subtle glow
+    // Smaller stars are sharper, larger stars have slight glow
+    float coreRadius = 0.15;
+    float glowRadius = 0.5;
 
-    // Twinkle effect
-    float twinkle = 0.7 + 0.3 * sin(uTime * 2.0 + vSeed * 100.0) * cos(uTime * 1.5 + vSeed * 50.0);
+    // Discard outside the point
+    if (dist > glowRadius) discard;
 
-    gl_FragColor = vec4(vColor * twinkle, alpha * 0.8);
+    // Sharp bright core
+    float core = 1.0 - smoothstep(0.0, coreRadius, dist);
+
+    // Subtle outer glow (only for larger stars)
+    float glow = (1.0 - smoothstep(coreRadius, glowRadius, dist)) * 0.3;
+
+    float alpha = core + glow * (vSize / 4.0);
+
+    // Twinkle effect - subtle variation
+    float twinkle = 0.85 + 0.15 * sin(uTime * 1.5 + vSeed * 100.0);
+
+    gl_FragColor = vec4(vColor * twinkle, alpha);
+}
+`;
+
+// Wispy galactic cloud shader - FBM-based distant nebula
+const wispyCloudVertexShader = `
+varying vec2 vUv;
+
+void main() {
+    vUv = uv;
+    gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+}
+`;
+
+const wispyCloudFragmentShader = `
+uniform float uTime;
+uniform vec3 uColor;
+uniform float uOpacity;
+uniform vec2 uOffset;
+uniform float uScale;
+
+varying vec2 vUv;
+
+// Hash for noise
+float hash(vec2 p) {
+    p = fract(p * vec2(234.34, 435.345));
+    p += dot(p, p + 34.23);
+    return fract(p.x * p.y);
+}
+
+// Smooth value noise
+float valueNoise(vec2 uv) {
+    vec2 i = floor(uv);
+    vec2 f = fract(uv);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+
+    float a = hash(i);
+    float b = hash(i + vec2(1.0, 0.0));
+    float c = hash(i + vec2(0.0, 1.0));
+    float d = hash(i + vec2(1.0, 1.0));
+
+    return mix(mix(a, b, u.x), mix(c, d, u.x), u.y);
+}
+
+// FBM for organic wispy shapes
+float fbm(vec2 uv) {
+    float n = 0.0;
+    float amplitude = 0.5;
+    float frequency = 1.0;
+
+    for (int i = 0; i < 6; i++) {
+        vec2 drift = vec2(
+            sin(uTime * 0.008 + float(i) * 0.7) * 0.2,
+            cos(uTime * 0.006 + float(i) * 1.1) * 0.15
+        );
+        n += amplitude * valueNoise(uv * frequency + drift);
+        amplitude *= 0.5;
+        frequency *= 2.0;
+    }
+
+    return n;
+}
+
+void main() {
+    vec2 uv = vUv * uScale + uOffset;
+
+    // Create wispy cloud shape with FBM
+    float noise = fbm(uv);
+
+    // Wispy threshold - creates thin streaky clouds
+    float wisp = smoothstep(0.35, 0.65, noise);
+
+    // Secondary layer for depth
+    float noise2 = fbm(uv * 1.5 + vec2(3.7, 2.1));
+    float wisp2 = smoothstep(0.4, 0.7, noise2) * 0.5;
+
+    float combined = wisp + wisp2;
+
+    // Soft radial fade from center
+    float dist = length(vUv - 0.5);
+    float fade = 1.0 - smoothstep(0.2, 0.5, dist);
+
+    float alpha = combined * fade * uOpacity;
+
+    gl_FragColor = vec4(uColor, alpha);
 }
 `;
 
@@ -579,8 +678,15 @@ export function Globe() {
             starPositions[i * 3 + 1] = r * Math.sin(phi) * Math.sin(theta);
             starPositions[i * 3 + 2] = r * Math.cos(phi);
 
-            // Random size (some stars bigger/brighter)
-            starSizes[i] = 0.5 + Math.random() * 2.0;
+            // Random size - mostly tiny pinpoints, few brighter stars
+            const sizeRand = Math.random();
+            if (sizeRand > 0.98) {
+                starSizes[i] = 2.5 + Math.random() * 1.5; // Rare bright stars (2%)
+            } else if (sizeRand > 0.9) {
+                starSizes[i] = 1.5 + Math.random() * 1.0; // Medium stars (8%)
+            } else {
+                starSizes[i] = 0.8 + Math.random() * 0.7; // Small pinpoints (90%)
+            }
 
             // Random seed for twinkle timing
             starSeeds[i] = Math.random();
@@ -627,6 +733,67 @@ export function Globe() {
 
         const stars = new THREE.Points(starGeometry, starMaterial);
         scene.add(stars);
+
+        // === WISPY GALACTIC CLOUDS ===
+        // FBM-based billboard planes for that distant, organic milky way feel
+        const wispyCloudGroup = new THREE.Group();
+        scene.add(wispyCloudGroup);
+
+        // Teal/emerald color palette
+        const cloudColors = [
+            new THREE.Color(0.04, 0.45, 0.32),  // Emerald
+            new THREE.Color(0.02, 0.35, 0.40),  // Teal
+            new THREE.Color(0.03, 0.28, 0.35),  // Deep teal
+            new THREE.Color(0.05, 0.50, 0.38),  // Bright emerald
+            new THREE.Color(0.02, 0.30, 0.45),  // Cyan-teal
+        ];
+
+        const wispyCloudConfigs = [
+            // Main band across the view - large, subtle
+            { position: new THREE.Vector3(0, 2, -20), scale: 40, color: cloudColors[0], opacity: 0.08, offset: [0, 0], uvScale: 2.0 },
+            { position: new THREE.Vector3(8, 1, -18), scale: 35, color: cloudColors[1], opacity: 0.06, offset: [3.1, 1.2], uvScale: 2.5 },
+            { position: new THREE.Vector3(-10, 3, -22), scale: 45, color: cloudColors[2], opacity: 0.07, offset: [5.5, 2.8], uvScale: 1.8 },
+            // Upper wisps
+            { position: new THREE.Vector3(5, 6, -25), scale: 30, color: cloudColors[3], opacity: 0.05, offset: [1.7, 4.3], uvScale: 3.0 },
+            { position: new THREE.Vector3(-8, 5, -23), scale: 28, color: cloudColors[4], opacity: 0.05, offset: [8.2, 0.5], uvScale: 2.8 },
+            // Lower subtle wisps
+            { position: new THREE.Vector3(12, -1, -19), scale: 25, color: cloudColors[1], opacity: 0.04, offset: [2.4, 6.1], uvScale: 3.2 },
+            { position: new THREE.Vector3(-15, 0, -24), scale: 32, color: cloudColors[2], opacity: 0.05, offset: [4.8, 3.3], uvScale: 2.2 },
+            // Distant background layer
+            { position: new THREE.Vector3(0, 2, -35), scale: 60, color: cloudColors[0], opacity: 0.04, offset: [7.0, 1.8], uvScale: 1.5 },
+            { position: new THREE.Vector3(15, 4, -38), scale: 50, color: cloudColors[3], opacity: 0.03, offset: [0.3, 5.5], uvScale: 1.8 },
+            { position: new THREE.Vector3(-12, 1, -40), scale: 55, color: cloudColors[4], opacity: 0.035, offset: [6.2, 2.1], uvScale: 1.6 },
+        ];
+
+        const wispyMeshes: THREE.Mesh[] = [];
+        const wispyUniformsList: { uTime: { value: number }; uColor: { value: THREE.Color }; uOpacity: { value: number }; uOffset: { value: THREE.Vector2 }; uScale: { value: number } }[] = [];
+
+        wispyCloudConfigs.forEach((config) => {
+            const wispyUniforms = {
+                uTime: { value: 0 },
+                uColor: { value: config.color },
+                uOpacity: { value: config.opacity },
+                uOffset: { value: new THREE.Vector2(config.offset[0], config.offset[1]) },
+                uScale: { value: config.uvScale },
+            };
+            wispyUniformsList.push(wispyUniforms);
+
+            const wispyMaterial = new THREE.ShaderMaterial({
+                vertexShader: wispyCloudVertexShader,
+                fragmentShader: wispyCloudFragmentShader,
+                uniforms: wispyUniforms,
+                transparent: true,
+                depthWrite: false,
+                side: THREE.DoubleSide,
+                blending: THREE.AdditiveBlending,
+            });
+
+            const wispyGeometry = new THREE.PlaneGeometry(config.scale, config.scale);
+            const wispyMesh = new THREE.Mesh(wispyGeometry, wispyMaterial);
+            wispyMesh.position.copy(config.position);
+            wispyMeshes.push(wispyMesh);
+            wispyCloudGroup.add(wispyMesh);
+        });
 
         // === 3D NEBULA CLOUDS ===
         // Create multiple billboard planes at different depths for volumetric effect
@@ -788,9 +955,19 @@ export function Globe() {
             starUniforms.uTime.value = elapsed;
             globeUniforms.uTime.value = elapsed;
 
+            // Update wispy cloud uniforms
+            wispyUniformsList.forEach((uniforms) => {
+                uniforms.uTime.value = elapsed;
+            });
+
             // Update nebula uniforms
             nebulaUniformsList.forEach((uniforms) => {
                 uniforms.uTime.value = elapsed;
+            });
+
+            // Make wispy clouds face the camera (billboard effect)
+            wispyMeshes.forEach((mesh) => {
+                mesh.lookAt(camera.position);
             });
 
             // Make nebula clouds face the camera (billboard effect)
@@ -835,7 +1012,8 @@ export function Globe() {
             camera.aspect = container.clientWidth / container.clientHeight;
             camera.updateProjectionMatrix();
             renderer.setSize(container.clientWidth, container.clientHeight);
-            starUniforms.uPixelRatio.value = Math.min(window.devicePixelRatio, 2);
+            const pixelRatio = Math.min(window.devicePixelRatio, 2);
+            starUniforms.uPixelRatio.value = pixelRatio;
         };
 
         window.addEventListener("resize", handleResize);
@@ -858,6 +1036,12 @@ export function Globe() {
             particlesMaterial.dispose();
             starGeometry.dispose();
             starMaterial.dispose();
+
+            // Dispose wispy cloud resources
+            wispyMeshes.forEach((mesh) => {
+                mesh.geometry.dispose();
+                (mesh.material as THREE.ShaderMaterial).dispose();
+            });
 
             // Dispose nebula resources
             nebulaMeshes.forEach((mesh) => {
