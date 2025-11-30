@@ -84,7 +84,7 @@ export default async function UserWorkspace({ params }: Props) {
 
     if (!user) {
         return (
-            <div className="min-h-screen flex items-center justify-center">
+            <div className="h-full flex items-center justify-center">
                 <div className="text-center">
                     <h1 className="text-4xl font-mono font-bold text-zinc-100 mb-4">
                         <span className="text-red-500">404</span> user not found
@@ -99,7 +99,7 @@ export default async function UserWorkspace({ params }: Props) {
     }
 
     return (
-        <div className="min-h-screen py-12 px-4">
+        <div className="h-full overflow-y-auto py-12 px-4">
             <div className="max-w-4xl mx-auto">
                 {/* Profile Header */}
                 <div className="border border-zinc-800 rounded-lg bg-zinc-900/50 p-8 mb-8">

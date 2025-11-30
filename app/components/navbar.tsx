@@ -11,7 +11,6 @@ import {
 
 const navLinks = [
     { href: "/explore", label: "explore" },
-    { href: "/docs", label: "docs" },
 ];
 
 export function Navbar() {

@@ -65,7 +65,11 @@ export default function RootLayout({
                         <Globe />
                     </div>
                     <Navbar />
-                    <main className="relative z-10 pt-14">{children}</main>
+                    <main className="relative z-10 pt-14 h-screen overflow-hidden">
+                        <div className="h-[calc(100vh-3.5rem)] overflow-hidden">
+                            {children}
+                        </div>
+                    </main>
                 </body>
             </html>
         </ClerkProvider>

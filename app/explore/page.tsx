@@ -1,6 +1,6 @@
 export default function Explore() {
     return (
-        <div className="relative min-h-screen">
+        <div className="relative h-full overflow-y-auto">
             <div className="relative z-10 max-w-2xl mx-auto px-4 py-8">
                 <h1 className="text-3xl font-mono font-bold text-zinc-100 mb-6">
                     <span className="text-emerald-400">$</span> explore
