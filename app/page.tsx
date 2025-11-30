@@ -26,7 +26,7 @@ export default async function Home() {
                             {githubUsername}.pushbar.dev
                         </a>
                     ) : (
-                        "[username].pushbar.dev"
+                        "[you].pushbar.dev"
                     )}
                 </p>
             </div>

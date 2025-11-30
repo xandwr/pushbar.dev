@@ -850,7 +850,7 @@ export function Globe() {
         globeGroup.add(globe);
 
         // Load land polygon data and create texture
-        fetch("/assets/ne_50m_land.json")
+        fetch("/assets/ne_50m_land.json", { cache: "force-cache" })
             .then((res) => {
                 if (!res.ok) {
                     throw new Error(`HTTP ${res.status}: ${res.statusText}`);
@@ -865,7 +865,7 @@ export function Globe() {
             .catch((err) => console.error("Failed to load land data:", err));
 
         // Load urban areas data for city lights (BO2-style)
-        fetch("/assets/ne_10m_urban_areas_landscan.json")
+        fetch("/assets/ne_10m_urban_areas_landscan.json", { cache: "force-cache" })
             .then((res) => {
                 if (!res.ok) {
                     throw new Error(`HTTP ${res.status}: ${res.statusText}`);
