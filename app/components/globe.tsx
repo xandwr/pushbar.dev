@@ -5,22 +5,22 @@ import { usePathname } from "next/navigation";
 import * as THREE from "three";
 
 // Camera view configurations
+// Camera position is fixed - only rotation (lookAt) and FOV change between views
 type CameraView = {
-    position: { x: number; y: number; z: number };
     lookAt: { x: number; y: number; z: number };
     fov: number;
 };
 
+const CAMERA_POSITION = { x: 0, y: 0, z: 2.5 };
+
 const CAMERA_VIEWS: Record<string, CameraView> = {
     landing: {
-        position: { x: 0, y: 0, z: 2.5 },
         lookAt: { x: 0, y: 0, z: 0 },
         fov: 45,
     },
     stargazer: {
-        position: { x: 0.5, y: 1.5, z: 2.0 },
-        lookAt: { x: 1, y: 2.5, z: -3 },
-        fov: 40,
+        lookAt: { x: 1.0, y: 2.0, z: 0 },
+        fov: 30,
     },
 };
 
@@ -540,14 +540,14 @@ export function Globe() {
         const scene = new THREE.Scene();
         scene.background = new THREE.Color(0x010203); // Deep space dark blue-black
 
-        // Camera
+        // Camera - fixed position, only rotation and FOV change
         const camera = new THREE.PerspectiveCamera(
             45,
             container.clientWidth / container.clientHeight,
             0.1,
             1000
         );
-        camera.position.z = 2.5;
+        camera.position.set(CAMERA_POSITION.x, CAMERA_POSITION.y, CAMERA_POSITION.z);
 
         // Renderer
         const renderer = new THREE.WebGLRenderer({
@@ -799,14 +799,10 @@ export function Globe() {
             });
 
             // Camera tweening based on current route
+            // Only rotation (lookAt) and FOV change - position stays fixed
             const targetView = getViewForPath(pathnameRef.current);
 
-            // Lerp camera position
-            camera.position.x += (targetView.position.x - camera.position.x) * LERP_FACTOR;
-            camera.position.y += (targetView.position.y - camera.position.y) * LERP_FACTOR;
-            camera.position.z += (targetView.position.z - camera.position.z) * LERP_FACTOR;
-
-            // Lerp lookAt target
+            // Lerp lookAt target (controls rotation)
             currentLookAt.x += (targetView.lookAt.x - currentLookAt.x) * LERP_FACTOR;
             currentLookAt.y += (targetView.lookAt.y - currentLookAt.y) * LERP_FACTOR;
             currentLookAt.z += (targetView.lookAt.z - currentLookAt.z) * LERP_FACTOR;
